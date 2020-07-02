@@ -89,7 +89,7 @@ class ScormXBlock(XBlock):
     height = Integer(
         display_name=_("Display height (px)"),
         help=_("Height of iframe"),
-        default=450,
+        default=650,
         scope=Scope.settings,
     )
 
@@ -157,7 +157,7 @@ class ScormXBlock(XBlock):
         )
 
     @XBlock.handler
-    def studio_submit(self, request, _suffix):
+    def studio_submit(self, request, _suffix=''):
         self.display_name = request.params["display_name"]
         self.width = request.params["width"]
         self.height = request.params["height"]
@@ -243,7 +243,7 @@ class ScormXBlock(XBlock):
         return os.path.join(self.scorm_location(), self.location.block_id)
 
     @XBlock.json_handler
-    def scorm_get_value(self, data, _suffix):
+    def scorm_get_value(self, data, _suffix=''):
         name = data.get("name")
         if name in ["cmi.core.lesson_status", "cmi.completion_status"]:
             return {"value": self.lesson_status}
@@ -254,7 +254,7 @@ class ScormXBlock(XBlock):
         return {"value": self.scorm_data.get(name, "")}
 
     @XBlock.json_handler
-    def scorm_set_value(self, data, _suffix):
+    def scorm_set_value(self, data, _suffix=''):
         context = {"result": "success"}
         name = data.get("name")
 

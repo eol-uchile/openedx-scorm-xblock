@@ -27,7 +27,7 @@ class ScormXBlockTests(unittest.TestCase):
 
     def test_fields_xblock(self):
         block = self.make_one()
-        self.assertEqual(block.display_name, "Scorm")
+        self.assertEqual(block.display_name, "Scorm module")
         self.assertEqual(block.index_page_url, "")
         self.assertEqual(block.package_meta, {})
         self.assertEqual(block.scorm_version, "SCORM_12")
@@ -36,10 +36,10 @@ class ScormXBlockTests(unittest.TestCase):
         self.assertEqual(block.scorm_data, {})
         self.assertEqual(block.lesson_score, 0)
         self.assertEqual(block.weight, 1)
-        self.assertEqual(block.has_score, False)
+        self.assertEqual(block.has_score, True)
         self.assertEqual(block.icon_class, "video")
         self.assertEqual(block.width, None)
-        self.assertEqual(block.height, 450)
+        self.assertEqual(block.height, 650)
 
     def test_save_settings_scorm(self):
         block = self.make_one()
@@ -50,6 +50,7 @@ class ScormXBlockTests(unittest.TestCase):
             "file": None,
             "width": 800,
             "height": 450,
+            "weight": 3.0,
         }
 
         block.studio_submit(mock.Mock(method="POST", params=fields))
@@ -59,25 +60,28 @@ class ScormXBlockTests(unittest.TestCase):
         self.assertEqual(block.width, 800)
         self.assertEqual(block.height, 450)
 
+
     @freeze_time("2018-05-01")
+    @mock.patch("openedxscorm.scormxblock.recursive_delete")
     @mock.patch("openedxscorm.ScormXBlock.update_package_fields")
     @mock.patch("openedxscorm.scormxblock.os")
     @mock.patch("openedxscorm.scormxblock.zipfile")
     @mock.patch("openedxscorm.scormxblock.File", return_value="call_file")
     @mock.patch("openedxscorm.scormxblock.default_storage")
     @mock.patch(
-        "openedxscorm.ScormXBlock._file_storage_path", return_value="file_storage_path"
+        "openedxscorm.ScormXBlock.package_path", return_value="package_path"
     )
     @mock.patch("openedxscorm.ScormXBlock.get_sha1", return_value="sha1")
     def test_save_scorm_zipfile(
         self,
         get_sha1,
-        file_storage_path,
+        package_path,
         default_storage,
         mock_file,
         zipfile,
         mock_os,
         update_package_fields,
+        recursive_delete,
     ):
         block = self.make_one()
         mock_file_object = mock.Mock()
@@ -91,24 +95,23 @@ class ScormXBlockTests(unittest.TestCase):
             "file": mock.Mock(file=mock_file_object),
             "width": None,
             "height": 450,
+            "weight": 3.0,
         }
 
         block.studio_submit(mock.Mock(method="POST", params=fields))
 
+        get_sha1.assert_called_once_with(mock_file_object)
+        self.assertEqual(default_storage.exists.call_count, 2)
+        default_storage.delete.assert_called_once_with(package_path)
+        default_storage.save.assert_called_once_with(package_path, "call_file")
+        mock_file.assert_called_once_with(mock_file_object)
+
         expected_package_meta = {
-            "path": "file_storage_path",
             "sha1": "sha1",
             "name": "scorm_file_name",
             "last_updated": "2018-05-01T00:00:00.000000",
-            "size": "1234",
+            "size": block.package_meta['size'], # can't patch seek() function
         }
-
-        get_sha1.assert_called_once_with(mock_file_object)
-        file_storage_path.assert_called_once_with()
-        default_storage.exists.assert_called_once_with("file_storage_path")
-        default_storage.delete.assert_called_once_with("file_storage_path")
-        default_storage.save.assert_called_once_with("file_storage_path", "call_file")
-        mock_file.assert_called_once_with(mock_file_object)
 
         self.assertEqual(block.package_meta, expected_package_meta)
 
@@ -125,22 +128,25 @@ class ScormXBlockTests(unittest.TestCase):
         self.assertEqual(file_storage_path, "org/course/block_type/block_id/sha1.html")
 
     @mock.patch(
-        "openedxscorm.ScormXBlock._file_storage_path", return_value="file_storage_path"
+        "openedxscorm.ScormXBlock.index_page_url", return_value="index_page_url"
+    )
+    @mock.patch(
+        "openedxscorm.ScormXBlock.package_path", return_value="package_path"
     )
     @mock.patch("openedxscorm.scormxblock.default_storage")
-    def test_student_view_data(self, default_storage, file_storage_path):
+    def test_student_view_data(self, default_storage, package_path, index_page_url):
         block = self.make_one(
-            package_meta={"last_updated": "2018-05-01", "size": 1234}
+            package_meta={"last_updated": "2018-05-01", "size": 1234},
+            index_page_path = "index_page_path"
         )
         default_storage.configure_mock(url=mock.Mock(return_value="url_zip_file"))
 
         student_view_data = block.student_view_data()
 
-        file_storage_path.assert_called_once_with()
-        default_storage.url.assert_called_once_with("file_storage_path")
+        default_storage.url.assert_called_once_with(package_path)
         self.assertEqual(
             student_view_data,
-            {"last_modified": "2018-05-01", "scorm_data": "url_zip_file", "size": 1234},
+            {"last_modified": "2018-05-01", "scorm_data": "url_zip_file", "size": 1234, "index_page": "index_page_path"},
         )
 
     @mock.patch(
@@ -157,7 +163,7 @@ class ScormXBlockTests(unittest.TestCase):
         block = self.make_one(has_score=True)
 
         response = block.scorm_set_value(
-            mock.Mock(method="POST", body=json.dumps(value))
+            mock.Mock(method="POST", body=json.dumps(value).encode('utf-8'))
         )
 
         publish_grade.assert_called_once_with()
@@ -189,7 +195,7 @@ class ScormXBlockTests(unittest.TestCase):
         block = self.make_one(has_score=True)
 
         response = block.scorm_set_value(
-            mock.Mock(method="POST", body=json.dumps(value))
+            mock.Mock(method="POST", body=json.dumps(value).encode('utf-8'))
         )
 
         get_completion_status.assert_called_once_with()
@@ -218,7 +224,7 @@ class ScormXBlockTests(unittest.TestCase):
         block = self.make_one(has_score=True)
 
         response = block.scorm_set_value(
-            mock.Mock(method="POST", body=json.dumps(value))
+            mock.Mock(method="POST", body=json.dumps(value).encode('utf-8'))
         )
 
         get_completion_status.assert_called_once_with()
@@ -239,7 +245,7 @@ class ScormXBlockTests(unittest.TestCase):
         block = self.make_one(lesson_status="status", success_status="status")
 
         response = block.scorm_get_value(
-            mock.Mock(method="POST", body=json.dumps(value))
+            mock.Mock(method="POST", body=json.dumps(value).encode('utf-8'))
         )
 
         self.assertEqual(response.json, {"value": "status"})
@@ -251,7 +257,7 @@ class ScormXBlockTests(unittest.TestCase):
         block = self.make_one(lesson_score=0.2)
 
         response = block.scorm_get_value(
-            mock.Mock(method="POST", body=json.dumps(value))
+            mock.Mock(method="POST", body=json.dumps(value).encode('utf-8'))
         )
 
         self.assertEqual(response.json, {"value": 20})
@@ -271,7 +277,7 @@ class ScormXBlockTests(unittest.TestCase):
         )
 
         response = block.scorm_get_value(
-            mock.Mock(method="POST", body=json.dumps(value))
+            mock.Mock(method="POST", body=json.dumps(value).encode('utf-8'))
         )
 
         self.assertEqual(response.json, {"value": block.scorm_data[value["name"]]})
