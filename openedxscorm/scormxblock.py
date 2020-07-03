@@ -109,10 +109,12 @@ class ScormXBlock(XBlock):
     def author_view(self, context=None):
         context = context or {}
         if not self.index_page_path:
-            context[
-                "message"
-            ] = "Click 'Edit' to modify this module and upload a new SCORM package."
-        return self.student_view(context=context)
+            context["message"] = "Click 'Edit' to modify this module and upload a new SCORM package."
+        else:
+            context["message"] = "Look in LMS"
+        html = self.render_template("static/html/author_view.html", context)
+        frag = Fragment(html)
+        return frag
 
     def student_view(self, context=None):
         student_context = {
@@ -275,7 +277,7 @@ class ScormXBlock(XBlock):
                 self.publish_grade()
                 context.update({"lesson_score": self.lesson_score})
         elif name in ["cmi.core.score.raw", "cmi.score.raw"] and self.has_score:
-            self.lesson_score = float(data.get("value", 0)) / 100.0
+            self.lesson_score = int(data.get("value", 0)) / 100.0 * self.weight
             self.publish_grade()
             context.update({"lesson_score": self.lesson_score})
         else:
@@ -296,7 +298,7 @@ class ScormXBlock(XBlock):
             and self.success_status in ["failed", "unknown"]
         ):
             lesson_score = 0
-        return lesson_score * self.weight
+        return lesson_score
 
     def set_score(self, score):
         """
