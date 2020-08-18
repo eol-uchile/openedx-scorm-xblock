@@ -30,6 +30,17 @@ In the Studio, go to the advanced settings of your course ("Settings" 🡒 "Adva
 
 Go back to your course content. In the "Add New Component" section, click "Advanced", and then "Scorm module". Click "Edit" on the newly-created module: this is where you will upload your content package. It should be a ``.zip`` file containing an ``imsmanifest.xml`` file at the root. The content of the package will be displayed in the Studio and the LMS after you click "Save".
 
+You must also configure the storage of the xblocks in the following format:
+```
+SCORM_STORAGE_CLASS = {
+  'class': 'storages.backends.s3boto3.S3Boto3Storage',
+  'options': {
+    'location': 'scorm/',
+    'bucket_name': 'scorm'
+  }
+}
+```
+
 Advanced configuration
 ----------------------
 

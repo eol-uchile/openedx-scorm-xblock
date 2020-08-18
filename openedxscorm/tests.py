@@ -28,7 +28,6 @@ class ScormXBlockTests(unittest.TestCase):
     def test_fields_xblock(self):
         block = self.make_one()
         self.assertEqual(block.display_name, "Scorm module")
-        self.assertEqual(block.index_page_url, "")
         self.assertEqual(block.package_meta, {})
         self.assertEqual(block.scorm_version, "SCORM_12")
         self.assertEqual(block.lesson_status, "not attempted")
@@ -67,7 +66,7 @@ class ScormXBlockTests(unittest.TestCase):
     @mock.patch("openedxscorm.scormxblock.os")
     @mock.patch("openedxscorm.scormxblock.zipfile")
     @mock.patch("openedxscorm.scormxblock.File", return_value="call_file")
-    @mock.patch("openedxscorm.scormxblock.default_storage")
+    @mock.patch("openedxscorm.scormxblock.get_scorm_storage")
     @mock.patch(
         "openedxscorm.ScormXBlock.package_path", return_value="package_path"
     )
@@ -101,9 +100,7 @@ class ScormXBlockTests(unittest.TestCase):
         block.studio_submit(mock.Mock(method="POST", params=fields))
 
         get_sha1.assert_called_once_with(mock_file_object)
-        self.assertEqual(default_storage.exists.call_count, 2)
-        default_storage.delete.assert_called_once_with(package_path)
-        default_storage.save.assert_called_once_with(package_path, "call_file")
+        default_storage().save.assert_called_once_with(package_path, "call_file")
         mock_file.assert_called_once_with(mock_file_object)
 
         expected_package_meta = {
@@ -126,28 +123,6 @@ class ScormXBlockTests(unittest.TestCase):
         file_storage_path = block.package_path
 
         self.assertEqual(file_storage_path, "org/course/block_type/block_id/sha1.html")
-
-    @mock.patch(
-        "openedxscorm.ScormXBlock.index_page_url", return_value="index_page_url"
-    )
-    @mock.patch(
-        "openedxscorm.ScormXBlock.package_path", return_value="package_path"
-    )
-    @mock.patch("openedxscorm.scormxblock.default_storage")
-    def test_student_view_data(self, default_storage, package_path, index_page_url):
-        block = self.make_one(
-            package_meta={"last_updated": "2018-05-01", "size": 1234},
-            index_page_path = "index_page_path"
-        )
-        default_storage.configure_mock(url=mock.Mock(return_value="url_zip_file"))
-
-        student_view_data = block.student_view_data()
-
-        default_storage.url.assert_called_once_with(package_path)
-        self.assertEqual(
-            student_view_data,
-            {"last_modified": "2018-05-01", "scorm_data": "url_zip_file", "size": 1234, "index_page": "index_page_path"},
-        )
 
     @mock.patch(
         "openedxscorm.ScormXBlock.get_completion_status",

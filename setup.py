@@ -41,7 +41,12 @@ setup(
     packages=["openedxscorm"],
     python_requires=">=3.5",
     install_requires=["xblock", "web-fragments"],
-    entry_points={"xblock.v1": ["scorm = openedxscorm:ScormXBlock"]},
+    entry_points={
+        "xblock.v1": ["scorm = openedxscorm:ScormXBlock"],
+        "lms.djangoapp": [
+            "openedxscorm = openedxscorm.apps:OpenedxScormConfig",
+        ],
+    },
     package_data=package_data("openedxscorm", ["static", "public", "locale"]),
     license="AGPLv3",
     classifiers=["License :: OSI Approved :: GNU Affero General Public License v3"],

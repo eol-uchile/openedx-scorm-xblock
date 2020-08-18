@@ -5,17 +5,22 @@ import logging
 import re
 import xml.etree.ElementTree as ET
 import zipfile
+import os.path
 
 from django.core.files import File
-from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 from django.template import Context, Template
 from django.utils import timezone
+from django.urls import reverse
+from django.core.files.uploadedfile import SimpleUploadedFile, InMemoryUploadedFile
 from webob import Response
 import pkg_resources
 
 from web_fragments.fragment import Fragment
 from xblock.core import XBlock
 from xblock.fields import Scope, String, Float, Boolean, Dict, DateTime, Integer
+
+from .utils import get_scorm_storage
 
 # Make '_' a no-op so we can scrape strings
 def _(text):
@@ -118,7 +123,7 @@ class ScormXBlock(XBlock):
 
     def student_view(self, context=None):
         student_context = {
-            "index_page_url": self.index_page_url,
+            "index_page_url": self.get_live_url(),
             "completion_status": self.get_completion_status(),
             "grade": self.get_grade(),
             "scorm_xblock": self,
@@ -173,27 +178,43 @@ class ScormXBlock(XBlock):
             return self.json_response(response)
 
         package_file = request.params["file"].file
+        package_data = package_file.read()
         self.update_package_meta(package_file)
 
+        # Clone zip file before django closes it when uploaded
+        if isinstance(package_file, InMemoryUploadedFile):
+            package_file = SimpleUploadedFile(
+                package_file.name,
+                package_data,
+                package_file.content_type
+            )
+
+
         # First, save scorm file in the storage for mobile clients
-        if default_storage.exists(self.package_path):
-            logger.info('Removing previously uploaded "%s"', self.package_path)
-            default_storage.delete(self.package_path)
-        default_storage.save(self.package_path, File(package_file))
+        storage = get_scorm_storage()
+        storage.save(self.package_path, File(package_file))
         logger.info('Scorm "%s" file stored at "%s"', package_file, self.package_path)
 
         # Then, extract zip file
-        if default_storage.exists(self.extract_folder_base_path):
-            logger.info(
-                'Removing previously unzipped "%s"', self.extract_folder_base_path
+        if isinstance(package_file, InMemoryUploadedFile):
+            package_file = SimpleUploadedFile(
+                package_file.name,
+                package_data,
+                package_file.content_type
             )
-            recursive_delete(self.extract_folder_base_path)
+
         with zipfile.ZipFile(package_file, "r") as scorm_zipfile:
             for zipinfo in scorm_zipfile.infolist():
-                default_storage.save(
-                    os.path.join(self.extract_folder_path, zipinfo.filename),
-                    scorm_zipfile.open(zipinfo.filename),
-                )
+                if os.path.splitext(zipinfo.filename)[1] in ["html", "html5", "css", "js"]:
+                    storage.save(
+                        os.path.join(self.extract_folder_path, zipinfo.filename),
+                        ContentFile(scorm_zipfile.open(zipinfo.filename).read().encode())
+                        )
+                else:
+                    storage.save(
+                        os.path.join(self.extract_folder_path, zipinfo.filename),
+                        ContentFile(scorm_zipfile.open(zipinfo.filename).read())
+                        )
 
         try:
             self.update_package_fields()
@@ -201,20 +222,6 @@ class ScormXBlock(XBlock):
             response["errors"].append(e.args[0])
 
         return self.json_response(response)
-
-    @property
-    def index_page_url(self):
-        if not self.package_meta or not self.index_page_path:
-            return ""
-        folder = self.extract_folder_path
-        if default_storage.exists(
-            os.path.join(self.extract_folder_base_path, self.index_page_path)
-        ):
-            # For backward-compatibility, we must handle the case when the xblock data
-            # is stored in the base folder.
-            folder = self.extract_folder_base_path
-            logger.warning("Serving SCORM content from old-style path: %s", folder)
-        return default_storage.url(os.path.join(folder, self.index_page_path))
 
     @property
     def package_path(self):
@@ -277,7 +284,7 @@ class ScormXBlock(XBlock):
                 self.publish_grade()
                 context.update({"lesson_score": self.lesson_score})
         elif name in ["cmi.core.score.raw", "cmi.score.raw"] and self.has_score:
-            self.lesson_score = int(data.get("value", 0)) / 100.0 * self.weight
+            self.lesson_score = min(int(data.get("value", 0)) / 100.0 * self.weight, self.weight)
             self.publish_grade()
             context.update({"lesson_score": self.lesson_score})
         else:
@@ -328,7 +335,7 @@ class ScormXBlock(XBlock):
         self.index_page_path = ""
         imsmanifest_path = os.path.join(self.extract_folder_path, "imsmanifest.xml")
         try:
-            imsmanifest_file = default_storage.open(imsmanifest_path)
+            imsmanifest_file = get_scorm_storage().open(imsmanifest_path)
         except IOError:
             raise ScormError(
                 "Invalid package: could not find 'imsmanifest.xml' file at the root of the zip file"
@@ -382,6 +389,12 @@ class ScormXBlock(XBlock):
         xblock_settings = settings_service.get_settings_bucket(self)
         return xblock_settings.get("LOCATION", default_scorm_location)
 
+    def get_live_url(self):
+        """
+        Get the url of the index page of the scorm
+        """
+        return reverse('openedxscorm:scorm-proxy', kwargs={'block_id': self.location.block_id, 'sha1': self.package_meta["sha1"], 'file': self.index_page_path})
+
     @staticmethod
     def get_sha1(file_descriptor):
         """
@@ -397,20 +410,6 @@ class ScormXBlock(XBlock):
         file_descriptor.seek(0)
         return sha1.hexdigest()
 
-    def student_view_data(self):
-        """
-        Inform REST api clients about original file location and it's "freshness".
-        Make sure to include `student_view_data=openedxscorm` to URL params in the request.
-        """
-        if self.index_page_url:
-            return {
-                "last_modified": self.package_meta.get("last_updated", ""),
-                "scorm_data": default_storage.url(self.package_path),
-                "size": self.package_meta.get("size", 0),
-                "index_page": self.index_page_path,
-            }
-        return {}
-
     @staticmethod
     def workbench_scenarios():
         """A canned scenario for display in the workbench."""
@@ -424,18 +423,17 @@ class ScormXBlock(XBlock):
             ),
         ]
 
-
 def recursive_delete(root):
     """
     Recursively delete the contents of a directory in the Django default storage.
     Unfortunately, this will not delete empty folders, as the default FileSystemStorage
     implementation does not allow it.
     """
-    directories, files = default_storage.listdir(root)
+    directories, files = get_scorm_storage().listdir(root)
     for directory in directories:
         recursive_delete(os.path.join(root, directory))
     for f in files:
-        default_storage.delete(os.path.join(root, f))
+        get_scorm_storage().delete(os.path.join(root, f))
 
 
 class ScormError(Exception):
